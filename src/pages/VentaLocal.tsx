@@ -146,9 +146,8 @@ function exportVentaPDF(data: VentaLocalData, precios: Precios, operador: string
   const W = doc.internal.pageSize.getWidth();
   type RGB = [number, number, number];
 
-  const { totalCargas, totalGarantias, totalExtrasPos, totalExtrasNeg, totalVales,
+  const { totalCargas, totalGarantias, totalExtrasPos,
           totalBruto, totalDesc, totalNeto, totalPagos, garantiaTotal } = calcTotalesData(data, precios);
-  const totalTransbank = data.transbank.reduce((s, t) => s + t.monto, 0);
   const diferencia = totalPagos - totalNeto;
   const cuadra = Math.abs(diferencia) < 1;
 
@@ -174,19 +173,20 @@ function exportVentaPDF(data: VentaLocalData, precios: Precios, operador: string
   doc.setDrawColor(220, 220, 220); doc.line(15, 35, W - 15, 35);
 
   type AutoTableBody = Parameters<typeof autoTable>[1]['body'];
+  type BodyRow = NonNullable<AutoTableBody>[number];
 
-  const SEC = (lbl: string, color: RGB, bg: RGB): AutoTableBody[number] => ({
+  const SEC = (lbl: string, color: RGB, bg: RGB): BodyRow => ({
     content: lbl, colSpan: 4,
     styles: { fillColor: bg, textColor: color, fontStyle: 'bold', fontSize: 9, cellPadding: 3 },
   });
-  const TOT = (lbl: string, val: string, color: RGB, bg: RGB): AutoTableBody[number][] => [{
+  const TOT = (lbl: string, val: string, color: RGB, bg: RGB): BodyRow => [{
     content: lbl, colSpan: 3,
     styles: { fillColor: bg, textColor: color, fontStyle: 'bold', fontSize: 9.5, halign: 'right', cellPadding: 3 },
   }, {
     content: val, styles: { fillColor: bg, textColor: color, fontStyle: 'bold', fontSize: 9.5, halign: 'right', cellPadding: 3 },
   }];
 
-  const body: AutoTableBody = [];
+  const body: NonNullable<AutoTableBody> = [];
 
   // ── Cargas
   const cargasConValor = TIPOS_VENTA.filter(t => data.cargas[t.key] > 0);
