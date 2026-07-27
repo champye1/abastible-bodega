@@ -1,0 +1,45 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Inter', system-ui, sans-serif;
+}
+
+*, *::before, *::after {
+  font-family: var(--font-sans);
+  box-sizing: border-box;
+}
+
+body {
+  background-color: #0f1117;
+  color: #e2e8f0;
+  margin: 0;
+}
+
+#root {
+  width: 100%;
+  min-height: 100vh;
+  text-align: left;
+  border: none;
+  display: block;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: #1a1d23;
+}
+::-webkit-scrollbar-thumb {
+  background: #3d4559;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #566078;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) opacity(0.5);
+  cursor: pointer;
+}
