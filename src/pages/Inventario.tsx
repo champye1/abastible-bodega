@@ -7,6 +7,7 @@ import autoTable from 'jspdf-autotable';
 const TIPOS = ['45', '11', '5', '15', 'VM'] as const;
 type Tipo = typeof TIPOS[number];
 type Row = Record<Tipo, number>;
+type Turno = 'am' | 'pm';
 
 function row(v45: number, v11: number, v5: number, v15: number, vVM = 0): Row {
   return { '45': v45, '11': v11, '5': v5, '15': v15, 'VM': vVM };
@@ -149,13 +150,15 @@ function buildInitialData(): Record<string, DiaData> {
     const d = new Date();
     d.setDate(d.getDate() - i);
     const iso = d.toISOString().slice(0, 10);
-    data[iso] = mockDia(i, i > 0);
+    const past = i > 0;
+    data[`${iso}_am`] = mockDia(i, past);
+    data[`${iso}_pm`] = past ? mockDia(i + 1, true) : emptyDia();
   }
   return data;
 }
 
 // ── Utilidades ─────────────────────────────────────────────────────────────────
-const STORAGE_KEY = 'abastible_inventario_v6';
+const STORAGE_KEY = 'abastible_inventario_v7';
 
 function isoToday(): string { return new Date().toISOString().slice(0, 10); }
 
@@ -226,7 +229,7 @@ function SectionHead({ label, bg, color }: { label: string; bg: string; color: s
 // ── Exportar PDF ───────────────────────────────────────────────────────────────
 type RGB = [number, number, number];
 
-function exportPDF(dia: DiaData, fecha: string) {
+function exportPDF(dia: DiaData, fecha: string, turno: Turno) {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const W = doc.internal.pageSize.getWidth();
 
@@ -243,7 +246,7 @@ function exportPDF(dia: DiaData, fecha: string) {
   doc.text('Bodega GLP  ·  Planta Santiago  ·  Pudahuel, RM', 15, 27);
 
   doc.setFontSize(13); doc.setFont('helvetica', 'bold'); doc.setTextColor(30, 30, 30);
-  doc.text('INVENTARIO DE CILINDROS', W - 15, 17, { align: 'right' });
+  doc.text(`INVENTARIO DE CILINDROS — TURNO ${turno.toUpperCase()}`, W - 15, 17, { align: 'right' });
   doc.setFontSize(9); doc.setFont('helvetica', 'normal'); doc.setTextColor(130, 130, 130);
   doc.text('Planta / Oficina de Ventas', W - 15, 23, { align: 'right' });
   doc.setFontSize(11); doc.setFont('helvetica', 'bold'); doc.setTextColor(249, 115, 22);
@@ -342,12 +345,13 @@ function exportPDF(dia: DiaData, fecha: string) {
   doc.text(`Generado el ${new Date().toLocaleString('es-CL')}  ·  Abastible S.A.`, 15, pH - 7);
   doc.text('Sistema Bodega v1.0', W - 15, pH - 7, { align: 'right' });
 
-  doc.save(`inventario_${fecha}.pdf`);
+  doc.save(`inventario_${fecha}_${turno}.pdf`);
 }
 
 // ── Página ─────────────────────────────────────────────────────────────────────
 export default function Inventario() {
   const [fecha, setFecha] = useState(isoToday());
+  const [turno, setTurno] = useState<Turno>(() => new Date().getHours() < 13 ? 'am' : 'pm');
   const [allData, setAllData] = useState<Record<string, DiaData>>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -361,61 +365,62 @@ export default function Inventario() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(allData));
   }, [allData]);
 
-  const dia = allData[fecha] ?? emptyDia();
+  const fechaTurno = `${fecha}_${turno}`;
+  const dia = allData[fechaTurno] ?? emptyDia();
   const locked = dia.cerrado;
 
   const upd = useCallback((field: keyof DiaData, tipo: Tipo, value: number) => {
     setAllData(prev => {
-      const d = prev[fecha] ?? emptyDia();
+      const d = prev[fechaTurno] ?? emptyDia();
       if (d.cerrado) return prev;
-      return { ...prev, [fecha]: { ...d, [field]: { ...(d[field] as Row), [tipo]: value } } };
+      return { ...prev, [fechaTurno]: { ...d, [field]: { ...(d[field] as Row), [tipo]: value } } };
     });
-  }, [fecha]);
+  }, [fechaTurno]);
 
   const updPersonaValor = useCallback((id: string, tipo: Tipo, value: number) => {
     setAllData(prev => {
-      const d = prev[fecha] ?? emptyDia();
+      const d = prev[fechaTurno] ?? emptyDia();
       if (d.cerrado) return prev;
-      return { ...prev, [fecha]: { ...d, v_personas: d.v_personas.map(p => p.id === id ? { ...p, valores: { ...p.valores, [tipo]: value } } : p) } };
+      return { ...prev, [fechaTurno]: { ...d, v_personas: d.v_personas.map(p => p.id === id ? { ...p, valores: { ...p.valores, [tipo]: value } } : p) } };
     });
-  }, [fecha]);
+  }, [fechaTurno]);
 
   const updPersonaNombre = useCallback((id: string, nombre: string) => {
     setAllData(prev => {
-      const d = prev[fecha] ?? emptyDia();
+      const d = prev[fechaTurno] ?? emptyDia();
       if (d.cerrado) return prev;
-      return { ...prev, [fecha]: { ...d, v_personas: d.v_personas.map(p => p.id === id ? { ...p, nombre } : p) } };
+      return { ...prev, [fechaTurno]: { ...d, v_personas: d.v_personas.map(p => p.id === id ? { ...p, nombre } : p) } };
     });
-  }, [fecha]);
+  }, [fechaTurno]);
 
   const addPersona = useCallback(() => {
     setAllData(prev => {
-      const d = prev[fecha] ?? emptyDia();
+      const d = prev[fechaTurno] ?? emptyDia();
       if (d.cerrado) return prev;
       const newP: FilaPersona = { id: crypto.randomUUID(), nombre: '', valores: emptyRow() };
-      return { ...prev, [fecha]: { ...d, v_personas: [...d.v_personas, newP] } };
+      return { ...prev, [fechaTurno]: { ...d, v_personas: [...d.v_personas, newP] } };
     });
-  }, [fecha]);
+  }, [fechaTurno]);
 
   const removePersona = useCallback((id: string) => {
     setAllData(prev => {
-      const d = prev[fecha] ?? emptyDia();
+      const d = prev[fechaTurno] ?? emptyDia();
       if (d.cerrado) return prev;
-      return { ...prev, [fecha]: { ...d, v_personas: d.v_personas.filter(p => p.id !== id) } };
+      return { ...prev, [fechaTurno]: { ...d, v_personas: d.v_personas.filter(p => p.id !== id) } };
     });
-  }, [fecha]);
+  }, [fechaTurno]);
 
   const updNotas = useCallback((v: string) => {
     setAllData(prev => {
-      const d = prev[fecha] ?? emptyDia();
+      const d = prev[fechaTurno] ?? emptyDia();
       if (d.cerrado) return prev;
-      return { ...prev, [fecha]: { ...d, notas: v } };
+      return { ...prev, [fechaTurno]: { ...d, notas: v } };
     });
-  }, [fecha]);
+  }, [fechaTurno]);
 
   function cerrar() {
-    const now = new Date().toLocaleTimeString('es-CL') + ' ' + formatFecha(fecha);
-    setAllData(prev => ({ ...prev, [fecha]: { ...(prev[fecha] ?? emptyDia()), cerrado: true, cerrado_at: now } }));
+    const now = `${turno.toUpperCase()} · ${new Date().toLocaleTimeString('es-CL')} ${formatFecha(fecha)}`;
+    setAllData(prev => ({ ...prev, [fechaTurno]: { ...(prev[fechaTurno] ?? emptyDia()), cerrado: true, cerrado_at: now } }));
     setConfirmCerrar(false);
   }
 
@@ -440,7 +445,7 @@ export default function Inventario() {
           <span style={{ fontSize: 12, color: '#475569' }}>— Planta / Oficina de Ventas</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button onClick={() => exportPDF(dia, fecha)}
+          <button onClick={() => exportPDF(dia, fecha, turno)}
             style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#0f2318', color: '#4ade80', border: '1px solid #4ade8030', borderRadius: 6, padding: '5px 12px', fontSize: 12, cursor: 'pointer' }}>
             <FileDown size={13} /> Exportar PDF
           </button>
@@ -450,23 +455,25 @@ export default function Inventario() {
             </div>
           ) : confirmCerrar ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ color: '#fbbf24', fontSize: 12 }}>¿Cerrar y bloquear este día?</span>
+              <span style={{ color: '#fbbf24', fontSize: 12 }}>¿Cerrar turno {turno.toUpperCase()} y bloquearlo?</span>
               <button onClick={cerrar} style={{ background: '#dc2626', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 12px', fontSize: 12, cursor: 'pointer' }}>Confirmar</button>
               <button onClick={() => setConfirmCerrar(false)} style={{ background: '#1e2432', color: '#94a3b8', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>Cancelar</button>
             </div>
           ) : (
             <button onClick={() => setConfirmCerrar(true)}
               style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#1e2432', color: '#94a3b8', border: '1px solid #2d3748', borderRadius: 6, padding: '5px 12px', fontSize: 12, cursor: 'pointer' }}>
-              <Unlock size={13} /> Cerrar día
+              <Unlock size={13} /> Cerrar turno {turno.toUpperCase()}
             </button>
           )}
         </div>
       </div>
 
-      {/* Tabs */}
+      {/* Tabs + turno toggle */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
         {tabs.map(t => {
-          const cerrado = allData[t]?.cerrado;
+          const cerradoAm = allData[`${t}_am`]?.cerrado;
+          const cerradoPm = allData[`${t}_pm`]?.cerrado;
+          const cerradoActual = allData[`${t}_${turno}`]?.cerrado;
           const active = t === fecha;
           return (
             <button key={t} onClick={() => { setFecha(t); setConfirmCerrar(false); }} style={{
@@ -476,14 +483,41 @@ export default function Inventario() {
               color: active ? '#fb923c' : '#64748b',
               fontSize: 12, display: 'flex', alignItems: 'center', gap: 4,
             }}>
-              {cerrado && <Lock size={10} />}{formatFecha(t)}
+              {cerradoActual && <Lock size={10} />}
+              {formatFecha(t)}
+              {(cerradoAm || cerradoPm) && (
+                <span style={{ fontSize: 9, color: active ? '#fb923c88' : '#4a556888' }}>
+                  {cerradoAm && cerradoPm ? '●●' : cerradoAm ? 'AM●' : '●PM'}
+                </span>
+              )}
             </button>
           );
         })}
         <input type="date" value={fecha}
           onChange={e => { setFecha(e.target.value); setConfirmCerrar(false); }}
-          style={{ marginLeft: 8, background: '#1e2432', border: '1px solid #2d3748', borderRadius: 6, color: '#94a3b8', fontSize: 12, padding: '4px 8px' }}
+          style={{ background: '#1e2432', border: '1px solid #2d3748', borderRadius: 6, color: '#94a3b8', fontSize: 12, padding: '4px 8px' }}
         />
+
+        {/* Toggle AM / PM */}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, background: '#0d1117', borderRadius: 8, padding: 3, border: '1px solid #2d3748' }}>
+          {(['am', 'pm'] as Turno[]).map(t => {
+            const active = t === turno;
+            const tCerrado = allData[`${fecha}_${t}`]?.cerrado;
+            return (
+              <button key={t} onClick={() => { setTurno(t); setConfirmCerrar(false); }} style={{
+                padding: '4px 18px', borderRadius: 6, border: 'none', cursor: 'pointer',
+                background: active ? (t === 'am' ? '#1a3a5c' : '#2a1a4a') : 'transparent',
+                color: active ? (t === 'am' ? '#60a5fa' : '#c084fc') : '#4a5568',
+                fontWeight: 800, fontSize: 12, letterSpacing: '0.08em',
+                display: 'flex', alignItems: 'center', gap: 5,
+                transition: 'all 0.15s',
+              }}>
+                {tCerrado && <Lock size={9} />}
+                {t.toUpperCase()}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Tabla */}
