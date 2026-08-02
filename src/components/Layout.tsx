@@ -4,8 +4,9 @@ import Sidebar from './Sidebar';
 import { Menu } from 'lucide-react';
 
 const MODULE_LABELS: Record<string, string> = {
-  '/venta-local': 'Venta Local',
-  '/inventario':  'Inventario Cilindros',
+  '/venta-local':   'Venta Local',
+  '/inventario':    'Inventario Cilindros',
+  '/configuracion': 'Config. y Backup',
 };
 
 export default function Layout() {
