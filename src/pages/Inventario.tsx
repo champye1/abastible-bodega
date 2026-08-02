@@ -1,7 +1,116 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Lock, Unlock, Boxes, FileDown, Plus, Trash2 } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Lock, Unlock, Boxes, FileDown, Plus, Trash2, Camera, AlertTriangle, Wifi, WifiOff } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+
+// ── Hook: sugerencias de cámara ────────────────────────────────────────────────
+const API_URL = 'http://localhost:3001';
+const POLL_MS = 15_000;
+
+interface LecturaAPI {
+  id: number; timestamp: string; espacio: 'lleno' | 'vacio';
+  kg45: number; kg15: number; kg11: number; kg5: number;
+  total: number; confianza: number;
+}
+interface ConteoActual { lleno: LecturaAPI | null; vacio: LecturaAPI | null; }
+
+function useCamaraConteo() {
+  const [datos, setDatos] = useState<ConteoActual | null>(null);
+  const [online, setOnline] = useState(false);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  async function fetchDatos() {
+    try {
+      const r = await fetch(`${API_URL}/api/conteo/actual`, { signal: AbortSignal.timeout(3000) });
+      if (!r.ok) throw new Error();
+      setDatos(await r.json());
+      setOnline(true);
+    } catch {
+      setOnline(false);
+    }
+  }
+
+  useEffect(() => {
+    fetchDatos();
+    timer.current = setInterval(fetchDatos, POLL_MS);
+    return () => { if (timer.current) clearInterval(timer.current); };
+  }, []);
+
+  return { datos, online };
+}
+
+// ── Componente: panel de cámara ────────────────────────────────────────────────
+function segundosAtras(iso: string) {
+  const seg = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+  if (seg < 60)  return `hace ${seg}s`;
+  if (seg < 3600) return `hace ${Math.round(seg / 60)}min`;
+  return `hace ${Math.round(seg / 3600)}h`;
+}
+
+function PanelCamara({ datos, online }: { datos: ConteoActual | null; online: boolean }) {
+  if (!online && !datos) return null;
+
+  return (
+    <div style={{ marginBottom: 14, background: '#0a0d13', border: `1px solid ${online ? '#1e3a2a' : '#2a1a00'}`, borderRadius: 10, padding: '10px 14px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: datos ? 10 : 0 }}>
+        <Camera size={13} style={{ color: online ? '#4ade80' : '#f59e0b' }} />
+        <span style={{ fontSize: 11, fontWeight: 700, color: online ? '#4ade80' : '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          Sistema de cámaras
+        </span>
+        {online
+          ? <Wifi size={11} style={{ color: '#4ade80', marginLeft: 4 }} />
+          : <WifiOff size={11} style={{ color: '#f59e0b', marginLeft: 4 }} />}
+        <span style={{ fontSize: 10, color: '#475569', marginLeft: 4 }}>
+          {online ? 'conectado' : 'sin conexión — último dato guardado'}
+        </span>
+      </div>
+
+      {datos && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          {(['lleno', 'vacio'] as const).map(esp => {
+            const lec = datos[esp];
+            if (!lec) return (
+              <div key={esp} style={{ background: '#0d1117', borderRadius: 7, padding: '8px 12px', border: '1px solid #1e2432' }}>
+                <p style={{ margin: 0, fontSize: 10, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  {esp === 'lleno' ? 'Llenos' : 'Vacíos'}
+                </p>
+                <p style={{ margin: '4px 0 0', fontSize: 11, color: '#2d3748' }}>Sin lectura aún</p>
+              </div>
+            );
+            const baja = lec.confianza < 0.7;
+            return (
+              <div key={esp} style={{ background: '#0d1117', borderRadius: 7, padding: '8px 12px', border: `1px solid ${baja ? '#92400e40' : '#1e2432'}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <span style={{ fontSize: 10, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>
+                    {esp === 'lleno' ? 'Llenos' : 'Vacíos'}
+                  </span>
+                  <span style={{ fontSize: 10, color: '#475569' }}>{segundosAtras(lec.timestamp)}</span>
+                </div>
+                {baja && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 5, color: '#f59e0b', fontSize: 10 }}>
+                    <AlertTriangle size={10} /> Confianza baja ({Math.round(lec.confianza * 100)}%) — verificar manualmente
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  {([['45kg', lec.kg45], ['15kg', lec.kg15], ['11kg', lec.kg11], ['5kg', lec.kg5]] as [string, number][]).map(([label, val]) => (
+                    <div key={label} style={{ textAlign: 'center' }}>
+                      <p style={{ margin: 0, fontSize: 9, color: '#475569' }}>{label}</p>
+                      <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: baja ? '#f59e0b' : '#e2e8f0' }}>{val}</p>
+                    </div>
+                  ))}
+                  <div style={{ textAlign: 'center', marginLeft: 'auto' }}>
+                    <p style={{ margin: 0, fontSize: 9, color: '#475569' }}>Total</p>
+                    <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: baja ? '#f59e0b' : '#60a5fa' }}>{lec.total}</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── Tipos ──────────────────────────────────────────────────────────────────────
 const TIPOS = ['45', '11', '5', '15', 'VM'] as const;
@@ -350,6 +459,7 @@ function exportPDF(dia: DiaData, fecha: string, turno: Turno) {
 
 // ── Página ─────────────────────────────────────────────────────────────────────
 export default function Inventario() {
+  const { datos: camaraDatos, online: camaraOnline } = useCamaraConteo();
   const [fecha, setFecha] = useState(isoToday());
   const [turno, setTurno] = useState<Turno>(() => new Date().getHours() < 13 ? 'am' : 'pm');
   const [allData, setAllData] = useState<Record<string, DiaData>>(() => {
@@ -519,6 +629,9 @@ export default function Inventario() {
           })}
         </div>
       </div>
+
+      {/* Panel cámara */}
+      <PanelCamara datos={camaraDatos} online={camaraOnline} />
 
       {/* Tabla */}
       <div style={{ background: '#0d1117', borderRadius: 10, border: '1px solid #1e2432', overflow: 'auto' }}>
