@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import VentaLocal from './pages/VentaLocal';
 import Inventario from './pages/Inventario';
+import Distribucion from './pages/Distribucion';
 import Configuracion from './pages/Configuracion';
 
 export default function App() {
@@ -11,6 +12,7 @@ export default function App() {
         <Route index element={<Navigate to="/venta-local" replace />} />
         <Route path="venta-local" element={<VentaLocal />} />
         <Route path="inventario" element={<Inventario />} />
+        <Route path="distribucion" element={<Distribucion />} />
         <Route path="configuracion" element={<Configuracion />} />
       </Route>
     </Routes>

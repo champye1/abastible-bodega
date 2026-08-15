@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { ShoppingCart, Boxes, X, Settings } from 'lucide-react';
+import { ShoppingCart, Boxes, X, Settings, Truck } from 'lucide-react';
 
 interface Props {
   onClose: () => void;
@@ -27,6 +27,7 @@ function AbastibleLogo() {
 const NAV = [
   { to: '/venta-local',   icon: ShoppingCart, label: 'Venta Local'          },
   { to: '/inventario',    icon: Boxes,        label: 'Inventario Cilindros' },
+  { to: '/distribucion',  icon: Truck,        label: 'Distribución'         },
   { to: '/configuracion', icon: Settings,     label: 'Config. y Backup'     },
 ];
 

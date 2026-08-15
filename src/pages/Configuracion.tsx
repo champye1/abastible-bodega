@@ -2,9 +2,10 @@ import { useState, useRef } from 'react';
 import { Download, Upload, Trash2, ShieldCheck, AlertTriangle, CheckCircle } from 'lucide-react';
 
 const STORAGE_KEYS = [
-  { key: 'abastible_inventario_v7', label: 'Inventario de Cilindros' },
-  { key: 'abastible_venta_local_v2', label: 'Venta Local (registros)' },
-  { key: 'abastible_precios_v1',     label: 'Precios configurados' },
+  { key: 'abastible_inventario_v7',   label: 'Inventario de Cilindros' },
+  { key: 'abastible_venta_local_v2',  label: 'Venta Local (registros)' },
+  { key: 'abastible_distribucion_v1', label: 'Distribución Conductores' },
+  { key: 'abastible_precios_v1',      label: 'Precios configurados' },
 ];
 const BACKUP_META_KEY = 'abastible_ultimo_backup';
 
