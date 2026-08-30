@@ -1,17 +1,31 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Truck, Lock, Unlock, FileDown, Plus, Trash2 } from 'lucide-react';
+import { Truck, Lock, Unlock, FileDown, Plus, Trash2, ChevronRight } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 // ── Tipos ──────────────────────────────────────────────────────────────────────
 const TIPOS = ['45', '15', '11', '5', 'VM'] as const;
 type Tipo = typeof TIPOS[number];
-type Row = Record<Tipo, number>;
+type Row  = Record<Tipo, number>;
+type Seccion = 'llenos' | 'vacios';
 
 function emptyRow(): Row { return { '45': 0, '15': 0, '11': 0, '5': 0, 'VM': 0 }; }
+
 function sumaRows(rows: Row[]): Row {
   const r = emptyRow();
   for (const rr of rows) for (const t of TIPOS) r[t] += rr[t];
+  return r;
+}
+
+function restaRows(a: Row, b: Row): Row {
+  const r = emptyRow();
+  for (const t of TIPOS) r[t] = a[t] - b[t];
+  return r;
+}
+
+function sumaRowsAdd(a: Row, b: Row): Row {
+  const r = emptyRow();
+  for (const t of TIPOS) r[t] = a[t] + b[t];
   return r;
 }
 
@@ -23,8 +37,8 @@ interface Conductor {
 }
 
 interface DiaDist {
-  cierre_llenos: Row;
-  cierre_vacios: Row;
+  inicio_llenos: Row;
+  inicio_vacios: Row;
   conductores: Conductor[];
   notas: string;
   cerrado: boolean;
@@ -33,34 +47,57 @@ interface DiaDist {
 
 function emptyDia(): DiaDist {
   return {
-    cierre_llenos: emptyRow(),
-    cierre_vacios: emptyRow(),
+    inicio_llenos: emptyRow(),
+    inicio_vacios: emptyRow(),
     conductores: [],
     notas: '', cerrado: false,
   };
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── Cierre auto-calculado ──────────────────────────────────────────────────────
+function calcCierre(dia: DiaDist): { llenos: Row; vacios: Row } {
+  const totalLlenos = sumaRows(dia.conductores.map(c => c.llenos));
+  const totalVacios = sumaRows(dia.conductores.map(c => c.vacios));
+  return {
+    llenos: restaRows(dia.inicio_llenos, totalLlenos),
+    vacios: sumaRowsAdd(dia.inicio_vacios, totalVacios),
+  };
+}
+
+// ── Storage ────────────────────────────────────────────────────────────────────
 const STORAGE_KEY = 'abastible_distribucion_v1';
+
 function isoToday() { return new Date().toISOString().slice(0, 10); }
+
 function formatFecha(iso: string) {
   const [y, m, d] = iso.split('-');
   return `${d}/${m}/${y}`;
 }
 
-// ── Celda editable (acepta negativos) ─────────────────────────────────────────
-function Cell({ value, onChange, locked, highlight = false }: {
-  value: number; onChange: (v: number) => void; locked: boolean; highlight?: boolean;
+// Obtiene el Cierre del día anterior como Inicio del día actual
+function getInicioFromPrev(allData: Record<string, DiaDist>, fecha: string): { llenos: Row; vacios: Row } | null {
+  const prev = new Date(fecha);
+  prev.setDate(prev.getDate() - 1);
+  const prevIso = prev.toISOString().slice(0, 10);
+  const prevDia = allData[prevIso];
+  if (!prevDia) return null;
+  return calcCierre(prevDia);
+}
+
+// ── Celda editable ─────────────────────────────────────────────────────────────
+function Cell({ value, onChange, locked, muted = false }: {
+  value: number; onChange: (v: number) => void; locked: boolean; muted?: boolean;
 }) {
-  const color = value < 0 ? '#f87171' : value > 0 ? '#e2e8f0' : '#1e2432';
+  const color = value < 0 ? '#f87171' : value > 0 ? (muted ? '#94a3b8' : '#e2e8f0') : '#3d4a5c';
   return (
-    <td style={{ padding: '2px 3px', textAlign: 'center', borderRight: '1px solid #1e2432', background: highlight ? '#0f2318' : undefined }}>
+    <td style={{ padding: '2px 3px', textAlign: 'center', borderRight: '1px solid #1e2432' }}>
       {locked ? (
-        <span style={{ color, fontSize: 12 }}>{value !== 0 ? value : '—'}</span>
+        <span style={{ color, fontSize: 12 }}>{value !== 0 ? value : <span style={{ opacity: 0.2 }}>—</span>}</span>
       ) : (
         <input
           type="number"
           value={value === 0 ? '' : value}
+          placeholder="—"
           onChange={e => onChange(parseInt(e.target.value) || 0)}
           style={{
             width: 44, background: 'transparent', border: 'none', outline: 'none',
@@ -72,22 +109,18 @@ function Cell({ value, onChange, locked, highlight = false }: {
   );
 }
 
-// ── Fila de totales ────────────────────────────────────────────────────────────
-function TotalRow({ label, llenos, vacios, bg, color }: {
-  label: string; llenos: Row; vacios: Row; bg: string; color: string;
+// ── Fila readonly (Inicio / Cierre) ───────────────────────────────────────────
+function SpecialRow({ label, row, bg, textColor, borderColor }: {
+  label: string; row: Row; bg: string; textColor: string; borderColor: string;
 }) {
   return (
-    <tr style={{ background: bg, borderBottom: '2px solid #0d1117' }}>
-      <td style={{ padding: '5px 10px', fontSize: 11, fontWeight: 800, color, borderRight: '1px solid #1e2432', whiteSpace: 'nowrap' }}>{label}</td>
+    <tr style={{ background: bg, borderBottom: `2px solid ${borderColor}` }}>
+      <td style={{ padding: '5px 10px', fontSize: 11, fontWeight: 800, color: textColor, borderRight: '1px solid #1e2432', whiteSpace: 'nowrap', minWidth: 120 }}>
+        {label}
+      </td>
       {TIPOS.map(t => (
-        <td key={`l-${t}`} style={{ padding: '5px 3px', textAlign: 'center', fontSize: 12, fontWeight: 800, color, borderRight: '1px solid #1e2432' }}>
-          {llenos[t] !== 0 ? llenos[t] : <span style={{ opacity: 0.2 }}>—</span>}
-        </td>
-      ))}
-      <td style={{ width: 1, background: '#2d3748', padding: 0 }} />
-      {TIPOS.map(t => (
-        <td key={`v-${t}`} style={{ padding: '5px 3px', textAlign: 'center', fontSize: 12, fontWeight: 800, color, borderRight: '1px solid #1e2432' }}>
-          {vacios[t] !== 0 ? vacios[t] : <span style={{ opacity: 0.2 }}>—</span>}
+        <td key={t} style={{ padding: '5px 3px', textAlign: 'center', fontSize: 12, fontWeight: 800, color: textColor, borderRight: '1px solid #1e2432', width: 52 }}>
+          {row[t] !== 0 ? row[t] : <span style={{ opacity: 0.25 }}>—</span>}
         </td>
       ))}
     </tr>
@@ -98,84 +131,83 @@ function TotalRow({ label, llenos, vacios, bg, color }: {
 type RGB = [number, number, number];
 
 function exportPDF(dia: DiaDist, fecha: string) {
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  const W = doc.internal.pageSize.getWidth();
+  const doc  = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const W    = doc.internal.pageSize.getWidth();
+  const cierre = calcCierre(dia);
+  const val    = (n: number) => n !== 0 ? String(n) : '';
+  const rVals  = (r: Row) => TIPOS.map(t => val(r[t]));
 
+  const GREEN:  RGB = [198, 239, 206]; const GREEN_T:  RGB = [0, 97, 0];
+  const BLUE:   RGB = [200, 220, 255]; const BLUE_T:   RGB = [0, 40, 120];
+  const ORANGE: RGB = [252, 224, 200]; const ORANGE_T: RGB = [140, 56, 0];
+  const WHITE:  RGB = [255, 255, 255]; const ALT: RGB = [248, 248, 248];
+
+  // Header
   doc.setFillColor(249, 115, 22); doc.rect(0, 0, W, 2, 'F');
   doc.setFontSize(18); doc.setFont('helvetica', 'bold'); doc.setTextColor(249, 115, 22);
   doc.text('ABASTIBLE', 15, 18);
   doc.setFontSize(8); doc.setFont('helvetica', 'normal'); doc.setTextColor(130, 130, 130);
-  doc.text('Bodega GLP  ·  Planta Santiago', 15, 25);
+  doc.text('Bodega GLP  ·  Distribución Conductores', 15, 25);
   doc.setFontSize(12); doc.setFont('helvetica', 'bold'); doc.setTextColor(30, 30, 30);
   doc.text('DISTRIBUCIÓN CONDUCTORES', W - 15, 14, { align: 'right' });
   doc.setFontSize(11); doc.setFont('helvetica', 'bold'); doc.setTextColor(249, 115, 22);
   doc.text(formatFecha(fecha), W - 15, 24, { align: 'right' });
   doc.setDrawColor(220, 220, 220); doc.line(15, 30, W - 15, 30);
 
-  const GREEN: RGB = [198, 239, 206]; const GREEN_T: RGB = [0, 97, 0];
-  const ORANGE: RGB = [252, 224, 200]; const ORANGE_T: RGB = [140, 56, 0];
-  const WHITE: RGB  = [255, 255, 255]; const ALT: RGB = [248, 248, 248];
-  const GREY: RGB   = [235, 235, 235];
-
-  const val = (n: number) => n !== 0 ? String(n) : '';
-  const rVals = (r: Row) => TIPOS.map(t => val(r[t]));
-
-  const head = [['CONDUCTOR', ...TIPOS.map(t => t === 'VM' ? 'VM' : `${t}kg`), '',
-    ...TIPOS.map(t => t === 'VM' ? 'VM' : `${t}kg`)]];
-
-  const totLlenos = sumaRows(dia.conductores.map(c => c.llenos));
-  const totVacios = sumaRows(dia.conductores.map(c => c.vacios));
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const body: any[] = [
-    // Cierre anterior
-    [
-      { content: 'CIERRE ANTERIOR', styles: { fillColor: GREEN, textColor: GREEN_T, fontStyle: 'bold' } },
-      ...rVals(dia.cierre_llenos).map(v => ({ content: v, styles: { fillColor: GREEN, textColor: GREEN_T, fontStyle: 'bold', halign: 'center' } })),
-      { content: '', styles: { fillColor: GREY } },
-      ...rVals(dia.cierre_vacios).map(v => ({ content: v, styles: { fillColor: GREEN, textColor: GREEN_T, fontStyle: 'bold', halign: 'center' } })),
-    ],
-    // Conductores
+  const makeBody = (seccion: Seccion): any[] => [
+    [{ content: 'INICIO', styles: { fillColor: GREEN, textColor: GREEN_T, fontStyle: 'bold' } },
+      ...rVals(seccion === 'llenos' ? dia.inicio_llenos : dia.inicio_vacios)
+        .map(v => ({ content: v, styles: { fillColor: GREEN, textColor: GREEN_T, fontStyle: 'bold', halign: 'center' as const } }))],
     ...dia.conductores.map((c, i) => [
       c.nombre || '—',
-      ...rVals(c.llenos).map(v => ({ content: v, styles: { fillColor: i % 2 === 0 ? WHITE : ALT, halign: 'center' as const } })),
-      { content: '', styles: { fillColor: GREY } },
-      ...rVals(c.vacios).map(v => ({ content: v, styles: { fillColor: i % 2 === 0 ? WHITE : ALT, halign: 'center' as const } })),
+      ...rVals(c[seccion]).map(v => ({ content: v, styles: { fillColor: i % 2 === 0 ? WHITE : ALT, halign: 'center' as const } })),
     ]),
-    // Totales
-    [
-      { content: 'TOTAL', styles: { fillColor: ORANGE, textColor: ORANGE_T, fontStyle: 'bold' } },
-      ...rVals(totLlenos).map(v => ({ content: v, styles: { fillColor: ORANGE, textColor: ORANGE_T, fontStyle: 'bold', halign: 'center' } })),
-      { content: '', styles: { fillColor: GREY } },
-      ...rVals(totVacios).map(v => ({ content: v, styles: { fillColor: ORANGE, textColor: ORANGE_T, fontStyle: 'bold', halign: 'center' } })),
-    ],
+    [{ content: 'CIERRE', styles: { fillColor: ORANGE, textColor: ORANGE_T, fontStyle: 'bold' } },
+      ...rVals(cierre[seccion])
+        .map(v => ({ content: v, styles: { fillColor: ORANGE, textColor: ORANGE_T, fontStyle: 'bold', halign: 'center' as const } }))],
   ];
 
+  const cols = ['CONDUCTOR', ...TIPOS.map(t => t === 'VM' ? 'VM' : `${t}kg`)];
+  const colStyles = {
+    0: { cellWidth: 50 },
+    1: { cellWidth: 22, halign: 'center' as const }, 2: { cellWidth: 22, halign: 'center' as const },
+    3: { cellWidth: 22, halign: 'center' as const }, 4: { cellWidth: 22, halign: 'center' as const },
+    5: { cellWidth: 18, halign: 'center' as const },
+  };
+
+  // Tabla LLENOS
+  doc.setFontSize(11); doc.setFont('helvetica', 'bold'); doc.setTextColor(30, 140, 80);
+  doc.text('LLENOS', 15, 37);
   autoTable(doc, {
-    startY: 34,
-    head,
-    body,
-    columnStyles: {
-      0: { cellWidth: 38 },
-      1: { cellWidth: 18, halign: 'center' }, 2: { cellWidth: 18, halign: 'center' },
-      3: { cellWidth: 18, halign: 'center' }, 4: { cellWidth: 18, halign: 'center' },
-      5: { cellWidth: 14, halign: 'center' }, 6: { cellWidth: 6 },
-      7: { cellWidth: 18, halign: 'center' }, 8: { cellWidth: 18, halign: 'center' },
-      9: { cellWidth: 18, halign: 'center' }, 10: { cellWidth: 18, halign: 'center' },
-      11: { cellWidth: 14, halign: 'center' },
-    },
-    headStyles: { fillColor: [235, 235, 235] as RGB, textColor: [50, 50, 50] as RGB, fontStyle: 'bold', halign: 'center' },
-    margin: { left: 15, right: 15 },
+    startY: 40, head: [cols], body: makeBody('llenos'),
+    columnStyles: colStyles,
+    headStyles: { fillColor: [220, 245, 225] as RGB, textColor: [0, 80, 40] as RGB, fontStyle: 'bold', halign: 'center' },
+    margin: { left: 15, right: W / 2 + 5 },
+    styles: { fontSize: 9, cellPadding: 3, lineColor: [210, 210, 210], lineWidth: 0.2 },
+    theme: 'plain',
+  });
+
+  // Tabla VACÍOS (columna derecha)
+  const startY = 40;
+  doc.setFontSize(11); doc.setFont('helvetica', 'bold'); doc.setTextColor(60, 100, 200);
+  doc.text('VACÍOS', W / 2 + 5, 37);
+  autoTable(doc, {
+    startY, head: [cols], body: makeBody('vacios'),
+    columnStyles: colStyles,
+    headStyles: { fillColor: BLUE, textColor: BLUE_T, fontStyle: 'bold', halign: 'center' },
+    margin: { left: W / 2 + 5, right: 15 },
     styles: { fontSize: 9, cellPadding: 3, lineColor: [210, 210, 210], lineWidth: 0.2 },
     theme: 'plain',
   });
 
   if (dia.notas.trim()) {
-    const finalY = (doc as any).lastAutoTable?.finalY ?? 100;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const finalY = Math.max((doc as any).lastAutoTable?.finalY ?? 100, 100) + 10;
     doc.setFontSize(8); doc.setFont('helvetica', 'bold'); doc.setTextColor(130, 130, 130);
-    doc.text('OBSERVACIONES', 15, finalY + 10);
+    doc.text('OBSERVACIONES', 15, finalY);
     doc.setFont('helvetica', 'normal'); doc.setTextColor(35, 35, 35);
-    doc.text(doc.splitTextToSize(dia.notas, W - 30), 15, finalY + 17);
+    doc.text(doc.splitTextToSize(dia.notas, W - 30), 15, finalY + 7);
   }
 
   doc.save(`distribucion_${fecha}.pdf`);
@@ -183,7 +215,10 @@ function exportPDF(dia: DiaDist, fecha: string) {
 
 // ── Página ─────────────────────────────────────────────────────────────────────
 export default function Distribucion() {
-  const [fecha, setFecha] = useState(isoToday());
+  const [fecha, setFecha]       = useState(isoToday());
+  const [seccion, setSeccion]   = useState<Seccion>('llenos');
+  const [confirmCerrar, setConfirmCerrar] = useState(false);
+
   const [allData, setAllData] = useState<Record<string, DiaDist>>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -191,32 +226,45 @@ export default function Distribucion() {
     } catch { /* ignore */ }
     return {};
   });
-  const [confirmCerrar, setConfirmCerrar] = useState(false);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(allData));
   }, [allData]);
 
+  // Si el día no existe, inicializarlo con el Cierre del día anterior
+  useEffect(() => {
+    if (!allData[fecha]) {
+      const prev = getInicioFromPrev(allData, fecha);
+      if (prev) {
+        setAllData(d => ({
+          ...d,
+          [fecha]: { ...emptyDia(), inicio_llenos: prev.llenos, inicio_vacios: prev.vacios },
+        }));
+      }
+    }
+  }, [fecha, allData]);
+
   const dia    = allData[fecha] ?? emptyDia();
   const locked = dia.cerrado;
+  const cierre = calcCierre(dia);
 
-  // ── Callbacks ────────────────────────────────────────────────────────────────
-  const updCierre = useCallback((seccion: 'cierre_llenos' | 'cierre_vacios', tipo: Tipo, v: number) => {
+  // ── Callbacks ──────────────────────────────────────────────────────────────
+  const updInicio = useCallback((sec: 'inicio_llenos' | 'inicio_vacios', tipo: Tipo, v: number) => {
     setAllData(prev => {
       const d = prev[fecha] ?? emptyDia();
       if (d.cerrado) return prev;
-      return { ...prev, [fecha]: { ...d, [seccion]: { ...(d[seccion] as Row), [tipo]: v } } };
+      return { ...prev, [fecha]: { ...d, [sec]: { ...(d[sec] as Row), [tipo]: v } } };
     });
   }, [fecha]);
 
-  const updConductor = useCallback((id: string, seccion: 'llenos' | 'vacios', tipo: Tipo, v: number) => {
+  const updConductor = useCallback((id: string, sec: Seccion, tipo: Tipo, v: number) => {
     setAllData(prev => {
       const d = prev[fecha] ?? emptyDia();
       if (d.cerrado) return prev;
       return {
         ...prev, [fecha]: {
           ...d, conductores: d.conductores.map(c =>
-            c.id === id ? { ...c, [seccion]: { ...c[seccion], [tipo]: v } } : c
+            c.id === id ? { ...c, [sec]: { ...c[sec], [tipo]: v } } : c
           ),
         },
       };
@@ -262,39 +310,28 @@ export default function Distribucion() {
     setConfirmCerrar(false);
   }
 
-  const totLlenos = sumaRows(dia.conductores.map(c => c.llenos));
-  const totVacios = sumaRows(dia.conductores.map(c => c.vacios));
-
   const tabs = Array.from({ length: 5 }, (_, i) => {
     const d = new Date(); d.setDate(d.getDate() - (4 - i));
     return d.toISOString().slice(0, 10);
   });
 
-  // Encabezado de sección (llenos / vacíos)
-  const SecHead = ({ label, color }: { label: string; color: string }) => (
-    <th colSpan={TIPOS.length} style={{
-      padding: '5px 8px', fontSize: 10, fontWeight: 800, color,
-      textTransform: 'uppercase', letterSpacing: '0.1em', textAlign: 'center',
-      borderRight: '1px solid #1e2432',
-    }}>
-      {label}
-    </th>
-  );
+  const inicioKey: 'inicio_llenos' | 'inicio_vacios' = seccion === 'llenos' ? 'inicio_llenos' : 'inicio_vacios';
+  const cierreRow = seccion === 'llenos' ? cierre.llenos : cierre.vacios;
+  const inicioRow = seccion === 'llenos' ? dia.inicio_llenos : dia.inicio_vacios;
 
   return (
-    <div style={{ maxWidth: 1000, margin: '0 auto' }}>
+    <div style={{ maxWidth: 900, margin: '0 auto' }}>
 
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <Truck size={20} style={{ color: '#f97316' }} />
           <h1 style={{ color: '#fff', fontSize: 18, fontWeight: 700, margin: 0 }}>Distribución Conductores</h1>
-          <span style={{ fontSize: 12, color: '#475569' }}>— Llenos / Vacíos por conductor</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <button onClick={() => exportPDF(dia, fecha)}
             style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#0f2318', color: '#4ade80', border: '1px solid #4ade8030', borderRadius: 6, padding: '5px 12px', fontSize: 12, cursor: 'pointer' }}>
-            <FileDown size={13} /> Exportar PDF
+            <FileDown size={13} /> PDF
           </button>
           {locked ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#f97316', fontSize: 12 }}>
@@ -315,8 +352,8 @@ export default function Distribucion() {
         </div>
       </div>
 
-      {/* Tabs de fecha */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+      {/* Tabs fecha */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
         {tabs.map(t => {
           const active  = t === fecha;
           const cerrado = allData[t]?.cerrado;
@@ -338,23 +375,38 @@ export default function Distribucion() {
         />
       </div>
 
-      {/* Tabla principal */}
-      <div style={{ background: '#0d1117', borderRadius: 10, border: '1px solid #1e2432', overflowX: 'auto' }}>
+      {/* Tabs LLENOS / VACÍOS */}
+      <div style={{ display: 'flex', gap: 2, marginBottom: 12 }}>
+        {(['llenos', 'vacios'] as Seccion[]).map(s => {
+          const active = s === seccion;
+          const color  = s === 'llenos' ? '#4ade80' : '#60a5fa';
+          const bg     = s === 'llenos' ? '#0a1f12' : '#0a1020';
+          return (
+            <button key={s} onClick={() => setSeccion(s)} style={{
+              padding: '7px 22px', borderRadius: '8px 8px 0 0', cursor: 'pointer', fontSize: 13, fontWeight: 700,
+              border: active ? `2px solid ${color}` : '2px solid #1e2432',
+              borderBottom: active ? `2px solid ${active ? bg : '#0d1117'}` : '2px solid #1e2432',
+              background: active ? bg : '#0a0d13',
+              color: active ? color : '#475569',
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}>
+              {s === 'llenos' ? '● Llenos' : '○ Vacíos'}
+              {active && <ChevronRight size={12} />}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Tabla */}
+      <div style={{ background: '#0d1117', borderRadius: '0 8px 8px 8px', border: `2px solid ${seccion === 'llenos' ? '#4ade8040' : '#60a5fa40'}`, overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
-            {/* Fila de sección LLENOS / VACÍOS */}
-            <tr style={{ background: '#0a0d13' }}>
-              <th rowSpan={2} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: '#475569', borderRight: '1px solid #1e2432', minWidth: 130, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            <tr style={{ background: '#161b27', borderBottom: '2px solid #2d3748' }}>
+              <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: '#475569', borderRight: '1px solid #1e2432', minWidth: 140, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 Conductor
               </th>
-              <SecHead label="Llenos" color="#4ade80" />
-              <th style={{ width: 8, background: '#1e2432' }} rowSpan={2} />
-              <SecHead label="Vacíos" color="#fb923c" />
-            </tr>
-            {/* Fila de tamaños */}
-            <tr style={{ background: '#161b27', borderBottom: '2px solid #2d3748' }}>
-              {[...TIPOS, ...TIPOS].map((t, i) => (
-                <th key={i} style={{ padding: '5px 3px', fontSize: 11, fontWeight: 800, color: '#e2e8f0', textAlign: 'center', borderRight: '1px solid #1e2432', width: 52 }}>
+              {TIPOS.map(t => (
+                <th key={t} style={{ padding: '8px 3px', fontSize: 11, fontWeight: 800, color: '#e2e8f0', textAlign: 'center', borderRight: '1px solid #1e2432', width: 52 }}>
                   {t === 'VM' ? 'VM' : `${t}kg`}
                 </th>
               ))}
@@ -362,17 +414,35 @@ export default function Distribucion() {
           </thead>
           <tbody>
 
-            {/* Fila: Cierre anterior */}
-            <tr style={{ background: '#0f2318', borderBottom: '1px solid #1a2e1a' }}>
-              <td style={{ padding: '5px 12px', fontSize: 11, fontWeight: 800, color: '#4ade80', borderRight: '1px solid #1e2432', whiteSpace: 'nowrap' }}>
-                Cierre anterior
-              </td>
-              {TIPOS.map(t => <Cell key={`cl-${t}`} value={dia.cierre_llenos[t]} onChange={v => updCierre('cierre_llenos', t, v)} locked={locked} highlight />)}
-              <td style={{ background: '#1e2432', width: 8 }} />
-              {TIPOS.map(t => <Cell key={`cv-${t}`} value={dia.cierre_vacios[t]} onChange={v => updCierre('cierre_vacios', t, v)} locked={locked} highlight />)}
-            </tr>
+            {/* INICIO */}
+            <SpecialRow
+              label="INICIO"
+              row={inicioRow}
+              bg="#0f2318"
+              textColor="#4ade80"
+              borderColor="#1a3a24"
+            />
+            {/* Inicio editable si no hay datos de día anterior */}
+            {!locked && (
+              <tr style={{ background: '#0a150e' }}>
+                <td style={{ padding: '2px 12px', fontSize: 10, color: '#2d5a40', borderRight: '1px solid #1e2432', fontStyle: 'italic' }}>
+                  {getInicioFromPrev(allData, fecha) ? 'auto desde cierre anterior' : 'ingresar manualmente ↓'}
+                </td>
+                {TIPOS.map(t => (
+                  <td key={t} style={{ padding: '2px 3px', borderRight: '1px solid #1e2432' }}>
+                    <input
+                      type="number"
+                      value={inicioRow[t] === 0 ? '' : inicioRow[t]}
+                      placeholder="—"
+                      onChange={e => updInicio(inicioKey, t, parseInt(e.target.value) || 0)}
+                      style={{ width: 44, background: 'transparent', border: 'none', borderBottom: '1px dashed #2d5a40', outline: 'none', textAlign: 'center', color: '#4ade8099', fontSize: 11 }}
+                    />
+                  </td>
+                ))}
+              </tr>
+            )}
 
-            {/* Filas de conductores */}
+            {/* Conductores */}
             {dia.conductores.map((c, idx) => (
               <tr key={c.id} style={{ background: idx % 2 === 0 ? '#0d1117' : '#0a0d13', borderBottom: '1px solid #141820' }}>
                 <td style={{ padding: '3px 8px', borderRight: '1px solid #1e2432' }}>
@@ -384,22 +454,22 @@ export default function Distribucion() {
                       style={{ flex: 1, background: 'transparent', border: 'none', borderBottom: '1px solid #2d3748', outline: 'none', color: '#e2e8f0', fontSize: 12, padding: '2px 4px' }}
                     />
                     {!locked && (
-                      <button onClick={() => removeConductor(c.id)} style={{ color: '#4a5568', background: 'none', border: 'none', cursor: 'pointer', padding: 2 }}>
+                      <button onClick={() => removeConductor(c.id)} style={{ color: '#4a5568', background: 'none', border: 'none', cursor: 'pointer', padding: 2, flexShrink: 0 }}>
                         <Trash2 size={11} />
                       </button>
                     )}
                   </div>
                 </td>
-                {TIPOS.map(t => <Cell key={`l-${t}`} value={c.llenos[t]} onChange={v => updConductor(c.id, 'llenos', t, v)} locked={locked} />)}
-                <td style={{ background: '#1e2432', width: 8 }} />
-                {TIPOS.map(t => <Cell key={`v-${t}`} value={c.vacios[t]} onChange={v => updConductor(c.id, 'vacios', t, v)} locked={locked} />)}
+                {TIPOS.map(t => (
+                  <Cell key={t} value={c[seccion][t]} onChange={v => updConductor(c.id, seccion, t, v)} locked={locked} />
+                ))}
               </tr>
             ))}
 
-            {/* Botón agregar conductor */}
+            {/* Agregar conductor */}
             {!locked && (
-              <tr style={{ borderBottom: '1px solid #141820' }}>
-                <td colSpan={TIPOS.length * 2 + 2} style={{ padding: '6px 12px' }}>
+              <tr>
+                <td colSpan={TIPOS.length + 1} style={{ padding: '6px 12px' }}>
                   <button onClick={addConductor} style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: '1px dashed #2d3748', borderRadius: 5, color: '#4a5568', fontSize: 11, padding: '4px 12px', cursor: 'pointer' }}>
                     <Plus size={11} /> Agregar conductor
                   </button>
@@ -407,11 +477,36 @@ export default function Distribucion() {
               </tr>
             )}
 
-            {/* Fila total */}
-            <TotalRow label="TOTAL" llenos={totLlenos} vacios={totVacios} bg="#1a1200" color="#fb923c" />
+            {/* CIERRE (auto-calculado) */}
+            <SpecialRow
+              label={`CIERRE  ${seccion === 'llenos' ? '(inicio − vendido)' : '(inicio + devuelto)'}`}
+              row={cierreRow}
+              bg="#1a1200"
+              textColor="#fb923c"
+              borderColor="#3d2800"
+            />
 
           </tbody>
         </table>
+      </div>
+
+      {/* Resumen rápido */}
+      <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+        {TIPOS.map(t => {
+          const inicio  = inicioRow[t];
+          const movim   = sumaRows(dia.conductores.map(c => c[seccion]))[t];
+          const cierreV = cierreRow[t];
+          if (inicio === 0 && movim === 0) return null;
+          return (
+            <div key={t} style={{ background: '#0d1117', border: '1px solid #1e2432', borderRadius: 8, padding: '8px 14px', minWidth: 90, textAlign: 'center' }}>
+              <div style={{ fontSize: 10, color: '#475569', marginBottom: 4 }}>{t === 'VM' ? 'VM' : `${t} kg`}</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: '#e2e8f0' }}>{cierreV}</div>
+              <div style={{ fontSize: 10, color: '#4a5568', marginTop: 2 }}>
+                {inicio} {seccion === 'llenos' ? '−' : '+'} {movim} = {cierreV}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       {/* Observaciones */}
@@ -421,11 +516,10 @@ export default function Distribucion() {
         </label>
         <textarea value={dia.notas} onChange={e => updNotas(e.target.value)}
           readOnly={locked} rows={3}
-          placeholder="PCC: llegó camión con 306x15, 48x11..."
+          placeholder="PCC: llegó camión con 306×15kg, 48×11kg...  |  Garantías: Germán debe 1×15kg..."
           style={{ width: '100%', background: '#0d1117', border: '1px solid #1e2432', borderRadius: 8, color: '#e2e8f0', fontSize: 13, padding: '10px 12px', resize: 'vertical', outline: 'none', boxSizing: 'border-box', fontFamily: 'monospace', lineHeight: 1.7, opacity: locked ? 0.6 : 1 }}
         />
       </div>
-
     </div>
   );
 }
